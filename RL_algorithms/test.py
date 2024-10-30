@@ -6,7 +6,7 @@ import numpy as np
 # SET UP ENVIRONMENT
 # You can also launch the simulator separately
 # in that case, you don't need to pass a `conf` object
-exe_path = "C:/Users/krish/OneDrive/Documents/projects/donkey_car/gym-donkeycar/donkey_sim.exe"
+exe_path = "../gym-donkeycar/donkey_sim.exe"
 port = 9091
 
 conf = { "exe_path" : exe_path, "port" : port }

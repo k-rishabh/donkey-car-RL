@@ -1,16 +1,13 @@
 # Reinforcement Learning on Donkey Car Simulator
 
 ## Setup
-Windows: Clone this GitHub repository into your folder. Next, run the following command to install the gym environment:
+
+1. Clone our repository into a folder. 
+2. Follow the setup instructions provided here and extract the simulator into our repository. The folder name of the simulator must be gym-donkeycar.
+3. Install the environment using the command:
 ```
 pip install git+https://github.com/tawnkramer/gym-donkeycar
 ```
-
-Mac OS: Follow the installation instructions for the Gym environment provided here: https://github.com/tawnkramer/gym-donkeycar/blob/master/README.md. Extract the Donkey Car gym environment into a folder and place our folder "RL_algorithms" into the same folder (following the structure provided in our repository). Don't forget to install the environment using:
-```
-pip install git+https://github.com/tawnkramer/gym-donkeycar
-```
-
 
 ## How to Run the Code
 Navigate to the RL_algorithms directory and run test.py.
