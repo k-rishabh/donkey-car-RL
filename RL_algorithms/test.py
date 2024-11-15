@@ -2,11 +2,19 @@ import os
 import gym
 import gym_donkeycar
 import numpy as np
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # SET UP ENVIRONMENT
 # You can also launch the simulator separately
 # in that case, you don't need to pass a `conf` object
-exe_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..\gym-donkeycar\donkey_sim.exe")
+
+
+#Change this SIM_PATH in .env file 
+exe_path = os.getenv("SIM_PATH")
+exe_path = os.path.abspath(exe_path)
+
 port = 9091
 
 conf = { "exe_path" : exe_path, "port" : port }
