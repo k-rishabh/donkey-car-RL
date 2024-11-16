@@ -1,0 +1,9 @@
+argparse
+gym
+gym-donkeycar
+numpy
+torch
+torchvision
+opencv-python
+git+https://github.com/tawnkramer/gym-donkeycar
+tensorboard

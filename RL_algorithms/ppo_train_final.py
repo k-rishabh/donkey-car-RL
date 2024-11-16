@@ -380,7 +380,7 @@ if __name__ == "__main__":
     memory = Memory()
 
     # Training parameters
-    max_episodes = 100
+    max_episodes = 10
     max_timesteps = 1000
     update_timestep = 4000  											
     log_interval = 1       										
