@@ -320,7 +320,7 @@ if __name__ == "__main__":
 
     if args.test:
         # Load the trained policy network
-        agent.actor.load_state_dict(torch.load("ddpg_actor.pth", map_location=device))
+        agent.actor.load_state_dict(torch.load("ddpg_actor_final.pth", map_location=device))
         print("Loaded trained actor network.")
         logger.info("Loaded trained actor network for testing.")
 
@@ -477,7 +477,7 @@ if __name__ == "__main__":
                 writer.add_scalar('Average Reward', avg_reward, episode)
                 writer.add_scalar('Average Timesteps', avg_timesteps, episode)
 
-            # Save the model
+            Save the model
             if save_models and episode % 100 == 0:
                 torch.save(agent.actor.state_dict(), "ddpg_actor.pth")
                 torch.save(agent.critic.state_dict(), "ddpg_critic.pth")
@@ -495,7 +495,7 @@ if __name__ == "__main__":
 
     finally:
         # Save the final model
-        torch.save(agent.actor.state_dict(), "ddpg_actor_final.pth")
+        torch.save(agent.actor.state_dict(), "ddpg_actor_final.pth")  
         torch.save(agent.critic.state_dict(), "ddpg_critic_final.pth")
         print("Final models saved.")
         logger.info("Final models saved.")
