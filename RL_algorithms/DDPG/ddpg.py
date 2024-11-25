@@ -1,196 +1,203 @@
-import gym
-import gym_donkeycar
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from collections import deque
+'''
+file: ddpg.py
+python ddpg.py --sim /path/donkey_sim.exe --env_name donkey-generated-roads-v0   #(FOR TRAINING)
+python ddpg.py --sim /path/donkey_sim.exe --env_name donkey-generated-roads-v0 --test --gui      # (FOR TESTING GUI)
+python ddpg.py --sim /path/donkey_sim.exe --env_name donkey-generated-roads-v0 --test     # (FOR TESTING HEADLESS) 
+'''
+
 import cv2
 import argparse
+from itertools import count
+import os, random
+import numpy as np
 
-# Check if CUDA is available
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+import gym
+import gym_donkeycar
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from tensorboardX import SummaryWriter
+
+
+# Arguments
+parser = argparse.ArgumentParser()
+parser.add_argument('--mode', default='train', type=str)  # 'train' or 'test'
+parser.add_argument("--env_name", default="donkey-generated-roads-v0", type=str)
+parser.add_argument('--tau', default=0.005, type=float)  # Target smoothing coefficient
+parser.add_argument('--gamma', default=0.99, type=float)  # Discount factor
+parser.add_argument('--learning_rate', default=1e-4, type=float)
+parser.add_argument('--capacity', default=100000, type=int)  # Replay buffer size
+parser.add_argument('--batch_size', default=64, type=int)  # Mini-batch size
+parser.add_argument('--exploration_noise', default=0.1, type=float)  # Noise for exploration
+parser.add_argument('--max_episode', default=1000, type=int)  # Number of episodes
+parser.add_argument('--max_timestep', default=1000, type=int)  # Max timesteps per episode
+parser.add_argument('--update_iteration', default=200, type=int)  # Updates per training loop
+parser.add_argument('--log_interval', default=1, type=int)
+parser.add_argument('--render', action='store_true')  # Render environment
+parser.add_argument('--save_dir', default='./ddpg_models', type=str)
+args = parser.parse_args()
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Initialize environment
+env = gym.make(args.env_name)
+state_dim = 84 * 84  # Input is preprocessed camera images (grayscale, flattened)
+action_dim = env.action_space.shape[0]
+max_action = float(env.action_space.high[0])
+
+if not os.path.exists(args.save_dir):
+    os.makedirs(args.save_dir)
+
+
+# Replay Buffer
+class ReplayBuffer:
+    def __init__(self, max_size=args.capacity):
+        self.storage = []
+        self.max_size = max_size
+        self.ptr = 0
+
+    def push(self, data):
+        if len(self.storage) == self.max_size:
+            self.storage[int(self.ptr)] = data
+            self.ptr = (self.ptr + 1) % self.max_size
+        else:
+            self.storage.append(data)
+
+    def sample(self, batch_size):
+        indices = np.random.randint(0, len(self.storage), size=batch_size)
+        batch = [self.storage[i] for i in indices]
+        states, next_states, actions, rewards, dones = zip(*batch)
+        return (
+            np.array(states),
+            np.array(next_states),
+            np.array(actions),
+            np.array(rewards).reshape(-1, 1),
+            np.array(dones).reshape(-1, 1),
+        )
+
 
 # Actor Network
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
         super(Actor, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, action_dim),
-            nn.Tanh()  # Output range [-1, 1]
-        )
+        self.fc1 = nn.Linear(state_dim, 400)
+        self.fc2 = nn.Linear(400, 300)
+        self.fc3 = nn.Linear(300, action_dim)
         self.max_action = max_action
 
-    def forward(self, state):
-        return self.net(state) * self.max_action
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.max_action * torch.tanh(self.fc3(x))
+        return x
 
 
 # Critic Network
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim):
         super(Critic, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim + action_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1)
-        )
+        self.fc1 = nn.Linear(state_dim + action_dim, 400)
+        self.fc2 = nn.Linear(400, 300)
+        self.fc3 = nn.Linear(300, 1)
 
     def forward(self, state, action):
         x = torch.cat([state, action], dim=1)
-        return self.net(x)
-
-
-# Replay Buffer
-class ReplayBuffer:
-    def __init__(self, max_size=100000):
-        self.buffer = deque(maxlen=max_size)
-
-    def add(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
-
-    def sample(self, batch_size):
-        indices = np.random.choice(len(self.buffer), batch_size, replace=False)
-        states, actions, rewards, next_states, dones = zip(*[self.buffer[idx] for idx in indices])
-        return (
-            np.array(states),
-            np.array(actions),
-            np.array(rewards).reshape(-1, 1),
-            np.array(next_states),
-            np.array(dones).reshape(-1, 1)
-        )
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
 
 
 # DDPG Agent
-class DDPGAgent:
-    def __init__(self, state_dim, action_dim, max_action, gamma=0.99, tau=0.005, lr=1e-3):
+class DDPG:
+    def __init__(self, state_dim, action_dim, max_action):
         self.actor = Actor(state_dim, action_dim, max_action).to(device)
         self.actor_target = Actor(state_dim, action_dim, max_action).to(device)
         self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.learning_rate)
 
         self.critic = Critic(state_dim, action_dim).to(device)
         self.critic_target = Critic(state_dim, action_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=args.learning_rate)
 
-        self.gamma = gamma
-        self.tau = tau
-        self.max_action = max_action
+        self.replay_buffer = ReplayBuffer()
+        self.writer = SummaryWriter(args.save_dir)
 
-    def select_action(self, state, noise_scale=0.1):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(device)
-        action = self.actor(state).cpu().data.numpy().flatten()
-        action += noise_scale * np.random.normal(size=action.shape)  # Add exploration noise
-        return np.clip(action, -self.max_action, self.max_action)
+        self.num_critic_updates = 0
+        self.num_actor_updates = 0
 
-    def train(self, replay_buffer, batch_size):
-        states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
+    def select_action(self, state):
+        state = torch.FloatTensor(state).to(device)
+        return self.actor(state).cpu().detach().numpy()
 
-        states = torch.FloatTensor(states).to(device)
-        actions = torch.FloatTensor(actions).to(device)
-        rewards = torch.FloatTensor(rewards).to(device)
-        next_states = torch.FloatTensor(next_states).to(device)
-        dones = torch.FloatTensor(dones).to(device)
+    def train(self):
+        for _ in range(args.update_iteration):
+            states, next_states, actions, rewards, dones = self.replay_buffer.sample(args.batch_size)
 
-        # Critic loss
-        with torch.no_grad():
-            next_actions = self.actor_target(next_states)
-            target_Q = self.critic_target(next_states, next_actions)
-            target_Q = rewards + (1 - dones) * self.gamma * target_Q
+            states = torch.FloatTensor(states).to(device)
+            next_states = torch.FloatTensor(next_states).to(device)
+            actions = torch.FloatTensor(actions).to(device)
+            rewards = torch.FloatTensor(rewards).to(device)
+            dones = torch.FloatTensor(1 - dones).to(device)
 
-        current_Q = self.critic(states, actions)
-        critic_loss = nn.MSELoss()(current_Q, target_Q)
+            # Critic update
+            target_q = rewards + (dones * args.gamma * self.critic_target(next_states, self.actor_target(next_states)))
+            current_q = self.critic(states, actions)
+            critic_loss = F.mse_loss(current_q, target_q.detach())
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            self.critic_optimizer.step()
 
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
+            # Actor update
+            actor_loss = -self.critic(states, self.actor(states)).mean()
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
 
-        # Actor loss
-        actor_loss = -self.critic(states, self.actor(states)).mean()
+            # Target networks update
+            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-
-        # Update target networks
-        for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-
-        for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+                target_param.data.copy_(args.tau * param.data + (1 - args.tau) * target_param.data)
 
 
-# Preprocess State
+# Preprocessing
 def preprocess_state(state):
-    """Convert RGB state to grayscale, resize, normalize, and flatten."""
-    gray = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
-    resized = cv2.resize(gray, (84, 84))
-    return resized.flatten() / 255.0
+    state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
+    state = cv2.resize(state, (84, 84))
+    return state.flatten().astype(np.float32) / 255.0
 
 
-# Training Loop
-def train(env, agent, replay_buffer, episodes, max_timesteps, batch_size, noise_scale, start_timesteps):
-    for episode in range(episodes):
-        state = env.reset()
-        state = preprocess_state(state)
-        episode_reward = 0
-
-        for t in range(max_timesteps):
-            # Select action
-            if len(replay_buffer.buffer) < start_timesteps:
-                action = env.action_space.sample()  # Random exploration
-            else:
-                action = agent.select_action(state, noise_scale)
-
-            # Step environment
-            next_state, reward, done, _ = env.step(action)
-            next_state = preprocess_state(next_state)
-
-            # Store transition
-            replay_buffer.add(state, action, reward, next_state, done)
-            state = next_state
-            episode_reward += reward
-
-            # Train agent
-            if len(replay_buffer.buffer) > batch_size:
-                agent.train(replay_buffer, batch_size)
-
-            if done:
-                break
-
-        print(f"Episode {episode + 1}: Reward = {episode_reward}")
-
-
+# Main Training Loop
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sim", type=str, required=True, help="Path to the Donkey Car simulator executable.")
-    parser.add_argument("--port", type=int, default=9091, help="Simulator port.")
-    args = parser.parse_args()
+    agent = DDPG(state_dim, action_dim, max_action)
 
-    # Initialize environment
-    env = gym.make("donkey-generated-roads-v0")
+    if args.mode == "train":
+        for episode in range(args.max_episode):
+            state = preprocess_state(env.reset())
+            episode_reward = 0
+            for t in range(args.max_timestep):
+                action = agent.select_action(state)
+                action = (action + np.random.normal(0, args.exploration_noise, size=action_dim)).clip(
+                    env.action_space.low, env.action_space.high
+                )
+                next_state, reward, done, _ = env.step(action)
+                next_state = preprocess_state(next_state)
 
-    # Hyperparameters
-    state_dim = 84 * 84  # Preprocessed state size
-    action_dim = env.action_space.shape[0]
-    max_action = float(env.action_space.high[0])
-    episodes = 1000
-    max_timesteps = 1000
-    batch_size = 256
-    noise_scale = 0.1
-    start_timesteps = 10000
+                agent.replay_buffer.push((state, next_state, action, reward, done))
+                state = next_state
+                episode_reward += reward
 
-    # Initialize agent and replay buffer
-    agent = DDPGAgent(state_dim, action_dim, max_action)
-    replay_buffer = ReplayBuffer()
+                if len(agent.replay_buffer.storage) > args.batch_size:
+                    agent.train()
 
-    # Train agent
-    train(env, agent, replay_buffer, episodes, max_timesteps, batch_size, noise_scale, start_timesteps)
+                if done:
+                    break
 
-    env.close()
+            print(f"Episode {episode}, Reward: {episode_reward}")
+
+            if episode % args.log_interval == 0:
+                torch.save(agent.actor.state_dict(), f"{args.save_dir}/actor.pth")
+                torch.save(agent.critic.state_dict(), f"{args.save_dir}/critic.pth")
