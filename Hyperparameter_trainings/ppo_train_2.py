@@ -12,17 +12,14 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-
-import cv2  # For image preprocessing
-
+import cv2
+import logging
 from collections import deque
 import traceback
-
-# Optional: For file logging
-import logging
-
-# Optional: For TensorBoard integration
 from torch.utils.tensorboard import SummaryWriter
+
+# Import matplotlib for plotting
+import matplotlib.pyplot as plt
 
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -95,7 +92,7 @@ class Memory:
 # Define the PPO Agent
 class PPOAgent:
     def __init__(self, state_dim, action_dim, lr=3e-4, gamma=0.99, lam=0.95, clip_epsilon=0.2, 
-                 K_epochs=4, minibatch_size=64, entropy_coef=0.01, hidden_dim=256):
+                 K_epochs=4, minibatch_size=64, entropy_coef=0.01):
         self.gamma = gamma
         self.lam = lam
         self.clip_epsilon = clip_epsilon
@@ -103,11 +100,11 @@ class PPOAgent:
         self.minibatch_size = minibatch_size
         self.entropy_coef = entropy_coef
 
-        self.policy = PolicyNetwork(state_dim, action_dim, hidden_dim).to(device)
-        self.policy_old = PolicyNetwork(state_dim, action_dim, hidden_dim).to(device)
+        self.policy = PolicyNetwork(state_dim, action_dim).to(device)
+        self.policy_old = PolicyNetwork(state_dim, action_dim).to(device)
         self.policy_old.load_state_dict(self.policy.state_dict())
         
-        self.value_net = ValueNetwork(state_dim, hidden_dim).to(device)
+        self.value_net = ValueNetwork(state_dim).to(device)
         
         self.optimizer = optim.Adam([
             {'params': self.policy.parameters(), 'lr': lr},
@@ -188,35 +185,26 @@ class PPOAgent:
         # Update old policy
         self.policy_old.load_state_dict(self.policy.state_dict())
 
-# Function to launch the simulator (modified for Windows)
+# Function to launch the simulator
 def launch_simulator(sim_path, port, gui=False):
-    """
-    Launches the Donkey Car simulator on Windows.
-
-    :param sim_path: (str) Absolute path to the simulator executable.
-    :param port: (int) Port number for TCP communication.
-    :param gui: (bool) Whether to launch the simulator with GUI.
-    :return: subprocess.Popen object representing the simulator process.
-    """
     try:
         if gui:
             print(f"Launching simulator from {sim_path} on port {port} with GUI...")
             # Launch simulator without headless flags
-            simulator_process = subprocess.Popen(
-                f'"{sim_path}" --port {port}',
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=True
-            )
+            simulator_process = subprocess.Popen([
+                sim_path,
+                "--port", str(port)
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         else:
             print(f"Launching simulator from {sim_path} on port {port} in headless mode...")
-            # Launch simulator with headless flag if supported
-            simulator_process = subprocess.Popen(
-                f'"{sim_path}" --port {port} --headless',
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=True
-            )
+            # Launch simulator with headless flags
+            simulator_process = subprocess.Popen([
+                sim_path,
+                "--port", str(port),
+                "-batchmode",
+                "-nographics",
+                "-silent-crashes"
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         # Wait for the simulator to initialize
         print("Waiting for simulator to initialize...")
@@ -229,11 +217,6 @@ def launch_simulator(sim_path, port, gui=False):
 
 # Function to terminate the simulator
 def terminate_simulator(simulator_process):
-    """
-    Terminates the Donkey Car simulator subprocess.
-
-    :param simulator_process: subprocess.Popen object representing the simulator process.
-    """
     try:
         print("Terminating simulator...")
         simulator_process.terminate()
@@ -245,21 +228,24 @@ def terminate_simulator(simulator_process):
 # Function to scale actions
 def scale_action(action):
     action = np.clip(action, -1, 1)
-    return action  # Since env expects actions in [-1, 1]
+    action_low = env.action_space.low
+    action_high = env.action_space.high
+    scaled_action = action * (action_high - action_low) / 2 + (action_high + action_low) / 2
+    return scaled_action
 
 # Main function
 if __name__ == "__main__":
 
-    # Optional: Setup logging
+    # Setup logging
     logging.basicConfig(
-        filename='training_ppo.log',  # Log file name
-        filemode='a',              # Append mode
+        filename='training.log',
+        filemode='a',
         format='%(asctime)s - %(levelname)s - %(message)s',
         level=logging.INFO
     )
     logger = logging.getLogger()
 
-    # Optional: Initialize TensorBoard writer
+    # Initialize TensorBoard writer
     writer = SummaryWriter('runs/ppo_training')
 
     # Environment configuration
@@ -302,30 +288,26 @@ if __name__ == "__main__":
 
     env_id = args.env_name
 
-    # Adjust the simulator path for Windows
-    sim_path = args.sim
-
     # Set environment variables for gym-donkeycar
-    os.environ['DONKEY_SIM_PATH'] = sim_path
+    os.environ['DONKEY_SIM_PATH'] = args.sim
     os.environ['DONKEY_SIM_PORT'] = str(args.port)
 
     # Launch the simulator with or without GUI based on the --gui flag
-    simulator_process = launch_simulator(sim_path, args.port, gui=args.gui)
+    simulator_process = launch_simulator(args.sim, args.port, gui=args.gui)
 
     # Initialize the environment
     env = gym.make(env_id)
     state_dim = 84 * 84  # After preprocessing, the state is a flattened (84,84) image
     action_dim = env.action_space.shape[0]
-    max_action = float(env.action_space.high[0])  # Assuming symmetric action space
 
     # Initialize the PPO agent
     agent = PPOAgent(state_dim, action_dim)
 
     if args.test:
         # Load the trained policy network
-        agent.policy_old.load_state_dict(torch.load("ppo_donkey_policy.pth", map_location=device))
-        print("Loaded trained policy network.")
-        logger.info("Loaded trained policy network for testing.")
+        agent.policy_old.load_state_dict(torch.load("ppo_best_policy.pth", map_location=device))
+        print("Loaded best-performing policy network.")
+        logger.info("Loaded best-performing policy network for testing.")
 
         # Run the testing loop
         try:
@@ -337,9 +319,9 @@ if __name__ == "__main__":
 
                 while not done:
                     # Preprocess state
-                    state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
-                    state_preprocessed = cv2.resize(state_preprocessed, (84, 84))  # Resize to reduce dimensionality
-                    state_preprocessed = state_preprocessed.flatten() / 255.0      # Flatten and normalize
+                    state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
+                    state_preprocessed = cv2.resize(state_preprocessed, (84, 84))
+                    state_preprocessed = state_preprocessed.flatten() / 255.0
 
                     # Select action without exploration
                     with torch.no_grad():
@@ -379,10 +361,10 @@ if __name__ == "__main__":
     memory = Memory()
 
     # Training parameters
-    max_episodes = 1000
-    max_timesteps = 2000
-    update_timestep = 2000  # TIMESTEPS
-    log_interval = 1       # LOGGING
+    max_episodes = 4000
+    max_timesteps = 1000
+    update_timestep = 4000
+    log_interval = 1
 
     timestep = 0
     episode = 0
@@ -390,6 +372,9 @@ if __name__ == "__main__":
     # Initialize metrics
     episode_rewards = []
     episode_timesteps = []
+
+    # Initialize best average reward
+    best_avg_reward = float('-inf')
 
     try:
         while episode < max_episodes:
@@ -399,9 +384,9 @@ if __name__ == "__main__":
             ep_timesteps = 0
             for t in range(max_timesteps):
                 # Preprocess state
-                state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
-                state_preprocessed = cv2.resize(state_preprocessed, (84, 84))  # Resize to reduce dimensionality
-                state_preprocessed = state_preprocessed.flatten() / 255.0      # Flatten and normalize
+                state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
+                state_preprocessed = cv2.resize(state_preprocessed, (84, 84))
+                state_preprocessed = state_preprocessed.flatten() / 255.0
 
                 # Select action with exploration
                 action_tanh, logprob, action = agent.select_action(state_preprocessed)
@@ -469,7 +454,16 @@ if __name__ == "__main__":
                 logger.info(f"Episode {episode}\tTimestep {timestep}")
                 logger.info(f"Average Reward: {avg_reward:.2f}\tAverage Timesteps: {avg_timesteps:.2f}")
 
-                # Optional: Log to TensorBoard
+                # Save the model if it's the best so far
+                if avg_reward > best_avg_reward:
+                    best_avg_reward = avg_reward
+                    # Save the best model
+                    torch.save(agent.policy.state_dict(), 'ppo_best_policy.pth')
+                    torch.save(agent.value_net.state_dict(), 'ppo_best_value.pth')
+                    print(f"New best average reward: {best_avg_reward:.2f}, model saved.")
+                    logger.info(f"New best average reward: {best_avg_reward:.2f}, model saved.")
+
+                # Log to TensorBoard
                 writer.add_scalar('Average Reward', avg_reward, episode)
                 writer.add_scalar('Average Timesteps', avg_timesteps, episode)
 
@@ -486,8 +480,8 @@ if __name__ == "__main__":
         # Save the final model
         torch.save(agent.policy.state_dict(), "ppo_donkey_policy.pth")
         torch.save(agent.value_net.state_dict(), "ppo_donkey_value.pth")
-        print("Models saved.")
-        logger.info("Models saved.")
+        print("Final models saved.")
+        logger.info("Final models saved.")
 
         # Close the environment
         env.close()
@@ -500,3 +494,24 @@ if __name__ == "__main__":
         # Close TensorBoard writer
         writer.close()
         logger.info("TensorBoard writer closed.")
+
+        # Plotting the training results
+        plt.figure()
+        plt.plot(range(1, episode + 1), episode_rewards)
+        plt.xlabel('Episode')
+        plt.ylabel('Total Reward')
+        plt.title('PPO Training: Total Reward per Episode')
+        plt.savefig('ppo_training_rewards.png')
+        plt.show()
+
+        # Optionally, plot the average reward over a moving window
+        window_size = 10
+        if len(episode_rewards) >= window_size:
+            moving_avg = np.convolve(episode_rewards, np.ones(window_size)/window_size, mode='valid')
+            plt.figure()
+            plt.plot(range(window_size, episode + 1), moving_avg)
+            plt.xlabel('Episode')
+            plt.ylabel('Average Reward')
+            plt.title(f'PPO Training: Moving Average Reward (Window Size {window_size})')
+            plt.savefig('ppo_training_moving_avg_rewards.png')
+            plt.show()

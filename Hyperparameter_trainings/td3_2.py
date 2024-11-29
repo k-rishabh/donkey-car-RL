@@ -1,5 +1,3 @@
-# td3_train.py
-
 import argparse
 import os
 import gym
@@ -10,23 +8,36 @@ import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import numpy as np
+import cv2
+import logging
 import random
-
-import cv2  # For image preprocessing
-
 from collections import deque
 import traceback
-
-# Optional: For file logging
-import logging
-
-# Optional: For TensorBoard integration
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+
+# Import matplotlib for plotting
+import matplotlib.pyplot as plt
 
 # Check if CUDA is available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Replay Buffer
+class ReplayBuffer:
+    def __init__(self, max_size=100000):
+        self.buffer = deque(maxlen=max_size)
+    
+    def add(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+    
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        state, action, reward, next_state, done = map(np.array, zip(*batch))
+        return state, action, reward, next_state, done
+
+    def size(self):
+        return len(self.buffer)
 
 # Actor Network
 class Actor(nn.Module):
@@ -34,171 +45,144 @@ class Actor(nn.Module):
         super(Actor, self).__init__()
         self.fc1 = nn.Linear(state_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.output = nn.Linear(hidden_dim, action_dim)
+        self.out = nn.Linear(hidden_dim, action_dim)
         self.max_action = max_action
-        
+    
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = torch.tanh(self.output(x)) * self.max_action
+        x = self.max_action * torch.tanh(self.out(x))
         return x
 
-# Critic Network
+# Critic Network (Twin Critic)
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(Critic, self).__init__()
         # Q1 architecture
         self.fc1_1 = nn.Linear(state_dim + action_dim, hidden_dim)
         self.fc1_2 = nn.Linear(hidden_dim, hidden_dim)
-        self.q1_output = nn.Linear(hidden_dim, 1)
-        
+        self.fc1_out = nn.Linear(hidden_dim, 1)
         # Q2 architecture
         self.fc2_1 = nn.Linear(state_dim + action_dim, hidden_dim)
         self.fc2_2 = nn.Linear(hidden_dim, hidden_dim)
-        self.q2_output = nn.Linear(hidden_dim, 1)
-        
+        self.fc2_out = nn.Linear(hidden_dim, 1)
+    
     def forward(self, x, u):
-        xu = torch.cat([x, u], 1)
-        
+        xu = torch.cat([x, u], dim=1)
         # Q1 forward
         x1 = F.relu(self.fc1_1(xu))
         x1 = F.relu(self.fc1_2(x1))
-        q1 = self.q1_output(x1)
-        
+        x1 = self.fc1_out(x1)
         # Q2 forward
         x2 = F.relu(self.fc2_1(xu))
         x2 = F.relu(self.fc2_2(x2))
-        q2 = self.q2_output(x2)
-        
-        return q1, q2
-    
+        x2 = self.fc2_out(x2)
+        return x1, x2
+
     def Q1(self, x, u):
-        xu = torch.cat([x, u], 1)
+        xu = torch.cat([x, u], dim=1)
         x1 = F.relu(self.fc1_1(xu))
         x1 = F.relu(self.fc1_2(x1))
-        q1 = self.q1_output(x1)
-        return q1
-
-# Replay Buffer
-class ReplayBuffer:
-    def __init__(self, max_size=int(1e6)):
-        self.storage = deque(maxlen=max_size)
-        
-    def add(self, state, action, next_state, reward, done):
-        self.storage.append((state, action, next_state, reward, done))
-        
-    def sample(self, batch_size):
-        batch = random.sample(self.storage, batch_size)
-        state, action, next_state, reward, done = map(np.stack, zip(*batch))
-        return (
-            torch.FloatTensor(state).to(device),
-            torch.FloatTensor(action).to(device),
-            torch.FloatTensor(next_state).to(device),
-            torch.FloatTensor(reward).unsqueeze(1).to(device),
-            torch.FloatTensor(done).unsqueeze(1).to(device)
-        )
+        x1 = self.fc1_out(x1)
+        return x1
 
 # TD3 Agent
 class TD3Agent:
-    def __init__(self, state_dim, action_dim, max_action, lr=3e-4, gamma=0.99, tau=0.005, policy_noise=0.2,
-                 noise_clip=0.5, policy_delay=2, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, max_action, actor_lr=1e-3, critic_lr=1e-3, gamma=0.99, tau=0.005, 
+                 policy_noise=0.2, noise_clip=0.5, policy_delay=2):
+        self.actor = Actor(state_dim, action_dim, max_action).to(device)
+        self.actor_target = Actor(state_dim, action_dim, max_action).to(device)
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
+
+        self.critic = Critic(state_dim, action_dim).to(device)
+        self.critic_target = Critic(state_dim, action_dim).to(device)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
+
+        self.max_action = max_action
         self.gamma = gamma
         self.tau = tau
         self.policy_noise = policy_noise * max_action
         self.noise_clip = noise_clip * max_action
         self.policy_delay = policy_delay
-        self.max_action = max_action
-        
-        self.actor = Actor(state_dim, action_dim, max_action, hidden_dim).to(device)
-        self.actor_target = Actor(state_dim, action_dim, max_action, hidden_dim).to(device)
-        self.actor_target.load_state_dict(self.actor.state_dict())
-        
-        self.critic = Critic(state_dim, action_dim, hidden_dim).to(device)
-        self.critic_target = Critic(state_dim, action_dim, hidden_dim).to(device)
-        self.critic_target.load_state_dict(self.critic.state_dict())
-        
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
-        
-        self.total_it = 0  # Keep track of the total number of updates
-    
+        self.total_it = 0
+
     def select_action(self, state):
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
-        return self.actor(state).cpu().data.numpy().flatten()
-    
-    def train(self, replay_buffer, batch_size=64):
+        action = self.actor(state).cpu().data.numpy().flatten()
+        return action
+
+    def train(self, replay_buffer, batch_size=100):
         self.total_it += 1
-        
+
         # Sample replay buffer
-        state, action, next_state, reward, done = replay_buffer.sample(batch_size)
-        
+        state, action, reward, next_state, done = replay_buffer.sample(batch_size)
+
+        state = torch.FloatTensor(state).to(device)
+        action = torch.FloatTensor(action).to(device)
+        reward = torch.FloatTensor(reward).unsqueeze(1).to(device)
+        next_state = torch.FloatTensor(next_state).to(device)
+        done = torch.FloatTensor(np.float32(done)).unsqueeze(1).to(device)
+
         with torch.no_grad():
             # Select action according to policy and add clipped noise
             noise = (torch.randn_like(action) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
             next_action = (self.actor_target(next_state) + noise).clamp(-self.max_action, self.max_action)
-            
-            # Compute the target Q-value
+
+            # Compute the target Q value
             target_Q1, target_Q2 = self.critic_target(next_state, next_action)
             target_Q = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (1 - done) * self.gamma * target_Q
-        
+            target_Q = reward + ((1 - done) * self.gamma * target_Q)
+
         # Get current Q estimates
         current_Q1, current_Q2 = self.critic(state, action)
-        
+
         # Compute critic loss
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-        
+
         # Optimize the critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
-        
+
         # Delayed policy updates
         if self.total_it % self.policy_delay == 0:
             # Compute actor loss
             actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
-            
+
             # Optimize the actor
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
             self.actor_optimizer.step()
-            
-            # Soft update the target networks
-            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-            
+
+            # Update the frozen target models
             for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-# Function to launch the simulator (same as PPO code)
-def launch_simulator(sim_path, port, gui=False):
-    """
-    Launches the Donkey Car simulator on Windows.
+            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-    :param sim_path: (str) Absolute path to the simulator executable.
-    :param port: (int) Port number for TCP communication.
-    :param gui: (bool) Whether to launch the simulator with GUI.
-    :return: subprocess.Popen object representing the simulator process.
-    """
+# Function to launch the simulator
+def launch_simulator(sim_path, port, gui=False):
     try:
         if gui:
             print(f"Launching simulator from {sim_path} on port {port} with GUI...")
             # Launch simulator without headless flags
-            simulator_process = subprocess.Popen(
-                f'"{sim_path}" --port {port}',
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=True
-            )
+            simulator_process = subprocess.Popen([
+                sim_path,
+                "--port", str(port)
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         else:
             print(f"Launching simulator from {sim_path} on port {port} in headless mode...")
-            # Launch simulator with headless flag if supported
-            simulator_process = subprocess.Popen(
-                f'"{sim_path}" --port {port} --headless',
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=True
-            )
+            # Launch simulator with headless flags
+            simulator_process = subprocess.Popen([
+                sim_path,
+                "--port", str(port),
+                "-batchmode",
+                "-nographics",
+                "-silent-crashes"
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         # Wait for the simulator to initialize
         print("Waiting for simulator to initialize...")
@@ -211,11 +195,6 @@ def launch_simulator(sim_path, port, gui=False):
 
 # Function to terminate the simulator
 def terminate_simulator(simulator_process):
-    """
-    Terminates the Donkey Car simulator subprocess.
-
-    :param simulator_process: subprocess.Popen object representing the simulator process.
-    """
     try:
         print("Terminating simulator...")
         simulator_process.terminate()
@@ -224,23 +203,19 @@ def terminate_simulator(simulator_process):
     except Exception as e:
         print(f"Error terminating simulator: {e}")
 
-# Function to scale actions
-def scale_action(action):
-    action = np.clip(action, -1, 1)
-    return action  # Since env expects actions in [-1, 1]
-
 # Main function
 if __name__ == "__main__":
-    # Optional: Setup logging
+
+    # Setup logging
     logging.basicConfig(
-        filename='training_td3.log',  # Log file name
-        filemode='a',              # Append mode
+        filename='training.log',
+        filemode='a',
         format='%(asctime)s - %(levelname)s - %(message)s',
         level=logging.INFO
     )
     logger = logging.getLogger()
 
-    # Optional: Initialize TensorBoard writer
+    # Initialize TensorBoard writer
     writer = SummaryWriter('runs/td3_training')
 
     # Environment configuration
@@ -283,87 +258,32 @@ if __name__ == "__main__":
 
     env_id = args.env_name
 
-    # Adjust the simulator path for Windows
-    sim_path = args.sim
-
     # Set environment variables for gym-donkeycar
-    os.environ['DONKEY_SIM_PATH'] = sim_path
+    os.environ['DONKEY_SIM_PATH'] = args.sim
     os.environ['DONKEY_SIM_PORT'] = str(args.port)
 
     # Launch the simulator with or without GUI based on the --gui flag
-    simulator_process = launch_simulator(sim_path, args.port, gui=args.gui)
+    simulator_process = launch_simulator(args.sim, args.port, gui=args.gui)
 
     # Initialize the environment
     env = gym.make(env_id)
-    state_dim = 84 * 84  # After preprocessing, the state is a flattened (84,84) image
+    state_dim = 84 * 84  # After preprocessing
     action_dim = env.action_space.shape[0]
-    max_action = 1.0  # Since actions are in [-1, 1]
+    max_action = float(env.action_space.high[0])
 
     # Initialize the TD3 agent
     agent = TD3Agent(state_dim, action_dim, max_action)
 
-    if args.test:
-        # Load the trained actor network
-        agent.actor.load_state_dict(torch.load("td3_actor.pth", map_location=device))
-        print("Loaded trained actor network.")
-        logger.info("Loaded trained actor network for testing.")
-
-        # Run the testing loop
-        try:
-            while True:
-                state = env.reset()
-                done = False
-                ep_reward = 0
-                ep_timesteps = 0
-
-                while not done:
-                    # Preprocess state
-                    state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
-                    state_preprocessed = cv2.resize(state_preprocessed, (84, 84))  # Resize to reduce dimensionality
-                    state_preprocessed = state_preprocessed.flatten() / 255.0      # Flatten and normalize
-
-                    # Select action without exploration
-                    action = agent.select_action(state_preprocessed)
-                    # Scale action to environment's action space
-                    scaled_action = scale_action(action)
-                    scaled_action = scaled_action.clip(env.action_space.low, env.action_space.high)
-
-                    next_state, reward, done, info = env.step(scaled_action)
-
-                    ep_reward += reward
-                    ep_timesteps += 1
-
-                    state = next_state
-
-                    if done:
-                        print(f"Test Episode Reward: {ep_reward}\tTimesteps: {ep_timesteps}")
-                        logger.info(f"Test Episode Reward: {ep_reward}\tTimesteps: {ep_timesteps}")
-                        break
-        except KeyboardInterrupt:
-            print("Testing interrupted by user.")
-            logger.info("Testing interrupted by user.")
-        except Exception as e:
-            print(f"An error occurred during testing: {e}")
-            logger.error(f"An error occurred during testing: {e}")
-            traceback.print_exc()
-        finally:
-            # Close the environment
-            env.close()
-            # Terminate the simulator
-            terminate_simulator(simulator_process)
-            # Close TensorBoard writer
-            writer.close()
-            sys.exit()
-
-    # Initialize replay buffer
+    # Initialize the replay buffer
     replay_buffer = ReplayBuffer()
 
     # Training parameters
-    max_episodes = 1000
-    max_timesteps = 2000
+    max_episodes = 50
+    max_timesteps = 1000
+    batch_size = 100
     exploration_noise = 0.1
-    batch_size = 64
-    start_timesteps = 10000  # Number of timesteps before starting training
+    start_timesteps = 10000  # Number of timesteps to collect data with random policy
+    log_interval = 1
 
     timestep = 0
     episode = 0
@@ -372,6 +292,9 @@ if __name__ == "__main__":
     episode_rewards = []
     episode_timesteps = []
 
+    # Initialize best average reward
+    best_avg_reward = float('-inf')
+
     try:
         while episode < max_episodes:
             state = env.reset()
@@ -379,25 +302,26 @@ if __name__ == "__main__":
             ep_reward = 0
             ep_timesteps = 0
 
-            for t in range(max_timesteps):
+            while not done:
                 # Preprocess state
-                state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)  # Convert to grayscale
-                state_preprocessed = cv2.resize(state_preprocessed, (84, 84))  # Resize to reduce dimensionality
-                state_preprocessed = state_preprocessed.flatten() / 255.0      # Flatten and normalize
+                state_preprocessed = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
+                state_preprocessed = cv2.resize(state_preprocessed, (84, 84))
+                state_preprocessed = state_preprocessed.flatten() / 255.0
 
                 if timestep < start_timesteps:
                     # Select random action
                     action = env.action_space.sample()
                 else:
-                    # Select action according to policy and add exploration noise
+                    # Select action according to policy
                     action = agent.select_action(state_preprocessed)
-                    action = (action + np.random.normal(0, exploration_noise, size=action_dim)).clip(-max_action, max_action)
+                    # Add exploration noise
+                    action = (action + np.random.normal(0, exploration_noise, size=action_dim)).clip(
+                        env.action_space.low, env.action_space.high
+                    )
 
-                # Scale action to environment's action space
-                scaled_action = scale_action(action)
-                scaled_action = scaled_action.clip(env.action_space.low, env.action_space.high)
-
-                next_state, reward, done, _ = env.step(scaled_action)
+                next_state, reward, done, _ = env.step(action)
+                ep_reward += reward
+                ep_timesteps += 1
 
                 # Preprocess next state
                 next_state_preprocessed = cv2.cvtColor(next_state, cv2.COLOR_RGB2GRAY)
@@ -405,18 +329,17 @@ if __name__ == "__main__":
                 next_state_preprocessed = next_state_preprocessed.flatten() / 255.0
 
                 # Store data in replay buffer
-                replay_buffer.add(state_preprocessed, action, next_state_preprocessed, reward, done)
+                replay_buffer.add(state_preprocessed, action, reward, next_state_preprocessed, float(done))
 
                 state = next_state
-                ep_reward += reward
-                ep_timesteps += 1
+                state_preprocessed = next_state_preprocessed
                 timestep += 1
 
                 # Train agent after collecting sufficient data
-                if timestep >= start_timesteps:
+                if timestep >= start_timesteps and replay_buffer.size() > batch_size:
                     agent.train(replay_buffer, batch_size)
 
-                if done:
+                if done or ep_timesteps >= max_timesteps:
                     break
 
             episode += 1
@@ -424,18 +347,27 @@ if __name__ == "__main__":
             episode_timesteps.append(ep_timesteps)
 
             # Logging
-            if episode % 1 == 0:
-                avg_reward = np.mean(episode_rewards[-1:])
-                avg_timesteps = np.mean(episode_timesteps[-1:])
+            if episode % log_interval == 0:
+                avg_reward = np.mean(episode_rewards[-log_interval:])
+                avg_timesteps = np.mean(episode_timesteps[-log_interval:])
 
                 print(f"Episode {episode}\tTimestep {timestep}")
-                print(f"Episode Reward: {ep_reward:.2f}\tTimesteps: {ep_timesteps}")
+                print(f"Average Reward: {avg_reward:.2f}\tAverage Timesteps: {avg_timesteps:.2f}")
                 logger.info(f"Episode {episode}\tTimestep {timestep}")
-                logger.info(f"Episode Reward: {ep_reward:.2f}\tTimesteps: {ep_timesteps}")
+                logger.info(f"Average Reward: {avg_reward:.2f}\tAverage Timesteps: {avg_timesteps:.2f}")
 
-                # Optional: Log to TensorBoard
-                writer.add_scalar('Episode Reward', ep_reward, episode)
-                writer.add_scalar('Episode Timesteps', ep_timesteps, episode)
+                # Save the model if it's the best so far
+                if avg_reward > best_avg_reward:
+                    best_avg_reward = avg_reward
+                    # Save the best model
+                    torch.save(agent.actor.state_dict(), 'td3_best_actor.pth')
+                    torch.save(agent.critic.state_dict(), 'td3_best_critic.pth')
+                    print(f"New best average reward: {best_avg_reward:.2f}, model saved.")
+                    logger.info(f"New best average reward: {best_avg_reward:.2f}, model saved.")
+
+                # Log to TensorBoard
+                writer.add_scalar('Average Reward', avg_reward, episode)
+                writer.add_scalar('Average Timesteps', avg_timesteps, episode)
 
     except KeyboardInterrupt:
         print("Training interrupted by user.")
@@ -447,11 +379,11 @@ if __name__ == "__main__":
         traceback.print_exc()
 
     finally:
-        # Save the final models
+        # Save the final model
         torch.save(agent.actor.state_dict(), "td3_actor.pth")
         torch.save(agent.critic.state_dict(), "td3_critic.pth")
-        print("Models saved.")
-        logger.info("Models saved.")
+        print("Final models saved.")
+        logger.info("Final models saved.")
 
         # Close the environment
         env.close()
@@ -464,3 +396,24 @@ if __name__ == "__main__":
         # Close TensorBoard writer
         writer.close()
         logger.info("TensorBoard writer closed.")
+
+        # Plotting the training results
+        plt.figure()
+        plt.plot(range(1, episode + 1), episode_rewards)
+        plt.xlabel('Episode')
+        plt.ylabel('Total Reward')
+        plt.title('TD3 Training: Total Reward per Episode')
+        plt.savefig('td3_training_rewards.png')
+        plt.show()
+
+        # Optionally, plot the average reward over a moving window
+        window_size = 10
+        if len(episode_rewards) >= window_size:
+            moving_avg = np.convolve(episode_rewards, np.ones(window_size)/window_size, mode='valid')
+            plt.figure()
+            plt.plot(range(window_size, episode + 1), moving_avg)
+            plt.xlabel('Episode')
+            plt.ylabel('Average Reward')
+            plt.title(f'TD3 Training: Moving Average Reward (Window Size {window_size})')
+            plt.savefig('td3_training_moving_avg_rewards.png')
+            plt.show()
