@@ -2,9 +2,6 @@ import argparse
 import os
 import gym
 import gym_donkeycar
-import subprocess
-import time
-import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim

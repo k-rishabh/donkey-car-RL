@@ -48,8 +48,8 @@ Ensure you have the necessary configurations and environment variables set for r
 |--------------------|----------------------------------------------------------------------------|
 | `Results`      | Results of our trained model |
 | `rl_algorithms/ppo`          | PPO implementation for autonomous driving in Donkey Car simulator          |
-| `RL_algorithms/ddpg`         | DDPG implementation for autonomous driving in Donkey Car simulator         |
-| `RL_algorithms/td3`          | TD3 implementation for autonomous driving in Donkey Car simulator          |
+| `rl_algorithms/ddpg`         | DDPG implementation for autonomous driving in Donkey Car simulator         |
+| `rl_algorithms/td3`          | TD3 implementation for autonomous driving in Donkey Car simulator          |
 | `archive`    | Old implementations of the algorithm         |
 
 ## Contributors
