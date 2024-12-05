@@ -18,11 +18,11 @@ This project aims to implement and compare the performance of three deep reinfor
 
 1. Clone our repository into a folder. 
 2. Follow the setup instructions provided here (https://github.com/tawnkramer/gym-donkeycar/releases) and extract the simulator into our repository. 
-3. Install the dependencies by
+3. Clone the gym-environment (https://github.com/tawnkramer/gym-donkeycar/) into our repository. 
+4. Install the dependencies by
 ```
 pip install -r .\requirements.txt
 ```
-4. Replace SIM_PATH in .env file with path of simulator
 5. Follow the setup instruction from (https://docs.donkeycar.com/guide/install_software) to integrate code for Donkey Car simulator and environment setup.
 
 ## How to Run the Code
@@ -30,7 +30,7 @@ Navigate to the RL_algorithms directory and to run any of the alogithms inside t
 ```
 python "filename" --sim "SIM_PATH" --test --gui
 ```
-Default configuration is training mode, to run the file on test mode add argument --test and visualize it using GUI add argument --gui
+Default configuration is training mode, to run the file on test mode add argument --test and visualize it using GUI add argument --gui. This will launch the exe file and start training and testing (does not work if exe has not been opened before).
 
 ## Algorithm Implementation
 
@@ -59,4 +59,3 @@ Ensure you have the necessary configurations and environment variables set for r
 - Rucha Pendharkar 
 - Santrupti Patil
 - Yash Phalle
-      
