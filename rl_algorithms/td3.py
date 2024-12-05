@@ -16,6 +16,8 @@ from collections import deque
 import traceback
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from helper import *
+
 
 # Import matplotlib for plotting
 import matplotlib.pyplot as plt
@@ -178,45 +180,6 @@ class TD3Agent:
             avg_Q = current_Q1.mean().item()
             self.q_value_history.append(avg_Q)
 
-# Function to launch the simulator
-def launch_simulator(sim_path, port, gui=False):
-    try:
-        if gui:
-            print(f"Launching simulator from {sim_path} on port {port} with GUI...")
-            # Launch simulator without headless flags
-            simulator_process = subprocess.Popen([
-                sim_path,
-                "--port", str(port)
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        else:
-            print(f"Launching simulator from {sim_path} on port {port} in headless mode...")
-            # Launch simulator with headless flags
-            simulator_process = subprocess.Popen([
-                sim_path,
-                "--port", str(port),
-                "-batchmode",
-                "-nographics",
-                "-silent-crashes"
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Wait for the simulator to initialize
-        print("Waiting for simulator to initialize...")
-        time.sleep(10)  # Adjust if the simulator takes longer to start
-        print(f"Simulator launched successfully {'with GUI' if gui else 'in headless mode'}.")
-        return simulator_process
-    except Exception as e:
-        print(f"Failed to launch simulator: {e}")
-        sys.exit(1)
-
-# Function to terminate the simulator
-def terminate_simulator(simulator_process):
-    try:
-        print("Terminating simulator...")
-        simulator_process.terminate()
-        simulator_process.wait(timeout=5)
-        print("Simulator terminated.")
-    except Exception as e:
-        print(f"Error terminating simulator: {e}")
 
 # Main function
 if __name__ == "__main__":

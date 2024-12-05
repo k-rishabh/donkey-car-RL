@@ -16,6 +16,8 @@ from collections import deque
 import traceback
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from helper import *
+
 
 # Import matplotlib for plotting
 import matplotlib.pyplot as plt
@@ -147,41 +149,6 @@ class DDPGAgent:
         for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
             target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-# Function to launch the simulator (same as in TD3 code)
-def launch_simulator(sim_path, port, gui=False):
-    try:
-        if gui:
-            print(f"Launching simulator from {sim_path} on port {port} with GUI...")
-            simulator_process = subprocess.Popen([
-                sim_path,
-                "--port", str(port)
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        else:
-            print(f"Launching simulator from {sim_path} on port {port} in headless mode...")
-            simulator_process = subprocess.Popen([
-                sim_path,
-                "--port", str(port),
-                "-batchmode",
-                "-nographics",
-                "-silent-crashes"
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print("Waiting for simulator to initialize...")
-        time.sleep(10)
-        print(f"Simulator launched successfully {'with GUI' if gui else 'in headless mode'}.")
-        return simulator_process
-    except Exception as e:
-        print(f"Failed to launch simulator: {e}")
-        sys.exit(1)
-
-# Function to terminate the simulator (same as in TD3 code)
-def terminate_simulator(simulator_process):
-    try:
-        print("Terminating simulator...")
-        simulator_process.terminate()
-        simulator_process.wait(timeout=5)
-        print("Simulator terminated.")
-    except Exception as e:
-        print(f"Error terminating simulator: {e}")
 
 # Main function
 if __name__ == "__main__":
