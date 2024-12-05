@@ -19,12 +19,14 @@ This project aims to implement and compare the performance of three deep reinfor
 pip install -r .\requirements.txt
 ```
 4. Replace SIM_PATH in .env file with path of simulator
+5. Follow the setup instruction from (https://docs.donkeycar.com/guide/install_software) to integrate code for Donkey Car simulator and environment setup.
 
 ## How to Run the Code
-Navigate to the RL_algorithms directory and to run any of the alogithms inside the directory run 
+Navigate to the RL_algorithms directory and to run any of the alogithms inside the directory using
 ```
 python "filename" --sim "SIM_PATH" --test --gui
 ```
+Default configuration is training mode, to run the file on test mode add argument --test and visualize it using GUI add argument --gui
 
 ## Algorithm Implementation
 
@@ -41,11 +43,10 @@ Ensure you have the necessary configurations and environment variables set for r
 | **Directory**      | **Description**                                                            |
 |--------------------|----------------------------------------------------------------------------|
 | `Results`      | Results of our trained model |
-| `RL_algorithms/PPO`          | PPO implementation for autonomous driving in Donkey Car simulator          |
-| `RL_algorithms/DDPG`         | DDPG implementation for autonomous driving in Donkey Car simulator         |
-| `RL_algorithms/TD3`          | TD3 implementation for autonomous driving in Donkey Car simulator          |
-| `RL_algorithms/gym_dokeycar`    | Integration code for Donkey Car simulator and environment setup            |
-| `Hyperparameter_trainings`        | Different Algorithms trained with various hyperparameters            |
+| `rl_algorithms/ppo`          | PPO implementation for autonomous driving in Donkey Car simulator          |
+| `RL_algorithms/ddpg`         | DDPG implementation for autonomous driving in Donkey Car simulator         |
+| `RL_algorithms/td3`          | TD3 implementation for autonomous driving in Donkey Car simulator          |
+| `archive`    | Old implementations of the alogirthm         |
 
 ## Contributors
 
