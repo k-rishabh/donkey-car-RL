@@ -1,7 +1,8 @@
 argparse
-gym
+gym==0.22
 gym-donkeycar
 numpy
+pillow
 torch
 torchvision
 opencv-python
