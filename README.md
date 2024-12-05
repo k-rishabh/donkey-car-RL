@@ -21,7 +21,10 @@ pip install -r .\requirements.txt
 4. Replace SIM_PATH in .env file with path of simulator
 
 ## How to Run the Code
-Navigate to the RL_algorithms directory and to run any of the alogithms inside the directory run -> **python "filename" --sim "SIM_PATH" --test --gui** in the terminal.
+Navigate to the RL_algorithms directory and to run any of the alogithms inside the directory run 
+```
+python "filename" --sim "SIM_PATH" --test --gui
+```
 
 ## Algorithm Implementation
 
