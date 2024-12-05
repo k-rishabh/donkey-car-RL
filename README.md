@@ -26,7 +26,7 @@ Navigate to the RL_algorithms directory and to run any of the alogithms inside t
 ```
 python "filename" --sim "SIM_PATH" --test --gui
 ```
-Default configuration is training mode, to run the file on test mode add argument --test and visualize in using GUI add argument --gui
+Default configuration is training mode, to run the file on test mode add argument --test and visualize it using GUI add argument --gui
 
 ## Algorithm Implementation
 
