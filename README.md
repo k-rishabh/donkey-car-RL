@@ -8,6 +8,10 @@ This project aims to implement and compare the performance of three deep reinfor
 - PPO, DDPG, and TD3 algorithms for autonomous driving tasks
 - Actor-critic architecture, experience replay, and target networks for stable training
 
+# Demo Video
+[![Watch the video](https://img.youtube.com/vi/ZiQCfR9pgNw/hqdefault.jpg)](https://youtu.be/ZiQCfR9pgNw)
+
+
 # Reinforcement Learning on Donkey Car Simulator
 
 ## Setup
