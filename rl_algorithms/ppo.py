@@ -2,8 +2,6 @@ import argparse
 import os
 import gym
 import gym_donkeycar
-import subprocess
-import time
 import sys
 import torch
 import torch.nn as nn
@@ -12,7 +10,6 @@ import torch.nn.functional as F
 import numpy as np
 import cv2
 import logging
-from collections import deque
 import traceback
 from torch.utils.tensorboard import SummaryWriter
 from helper import *
@@ -240,7 +237,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--env_name",
         type=str,
-        default="donkey-generated-roads-v0",
+        default="donkey-mountain-track-v0",
         help="Name of the Donkey Sim environment.",
         choices=env_list,
     )
@@ -271,7 +268,7 @@ if __name__ == "__main__":
 
     if args.test:
         # Load the trained policy network
-        agent.policy_old.load_state_dict(torch.load("ppo_best_policy.pth", map_location=device))
+        agent.policy_old.load_state_dict(torch.load(os.path.join(os.getcwd(), "results/models/ppo/ppo_best_policy.pth"), map_location=device))
         print("Loaded best-performing policy network.")
         logger.info("Loaded best-performing policy network for testing.")
 
@@ -293,7 +290,7 @@ if __name__ == "__main__":
                     with torch.no_grad():
                         action_tanh, _, _ = agent.select_action(state_preprocessed)
                     # Scale action to environment's action space
-                    scaled_action = scale_action(action_tanh)
+                    scaled_action = scale_action(action_tanh, env)
                     scaled_action = scaled_action.clip(env.action_space.low, env.action_space.high)
 
                     next_state, reward, done, info = env.step(scaled_action)

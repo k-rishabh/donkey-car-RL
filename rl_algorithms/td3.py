@@ -2,9 +2,6 @@ import argparse
 import os
 import gym
 import gym_donkeycar
-import subprocess
-import time
-import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -222,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--env_name",
         type=str,
-        default="donkey-generated-roads-v0",
+        default="donkey-mountain-track-v0",
         help="Name of the Donkey Sim environment.",
         choices=env_list,
     )

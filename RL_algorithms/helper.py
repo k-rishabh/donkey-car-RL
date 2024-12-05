@@ -2,11 +2,7 @@
 import subprocess
 import time
 import sys
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
 import numpy as np
-from collections import deque
 
 
 # Function to launch the simulator
@@ -51,7 +47,7 @@ def terminate_simulator(simulator_process):
         
 
 # Function to scale actions
-def scale_action(action):
+def scale_action(action, env):
     action = np.clip(action, -1, 1)
     action_low = env.action_space.low
     action_high = env.action_space.high
